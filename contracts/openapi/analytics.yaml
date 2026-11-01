@@ -1,0 +1,203 @@
+openapi: 3.1.0
+info:
+  title: Eventista Analytics API
+  version: 0.1.0
+  description: >
+    Analytics bounded context (FastAPI): activity feed and aggregates —
+    projections only, never truth (ADR-0001/0004). Consumes Kafka events
+    with idempotent handlers (B6); a Mongo outage degrades these reads, not
+    correctness.
+servers:
+  - url: /
+tags:
+  - name: health
+  - name: feed
+  - name: aggregates
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness — datastore-independent
+      security: []
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness — 503 when degraded (Mongo/kafka state reported in checks)
+      security: []
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+        "503":
+          description: Degraded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+  /metrics:
+    get:
+      tags: [health]
+      operationId: getMetrics
+      summary: RED metrics — not routed via gateway
+      security: []
+      responses:
+        "200":
+          description: Prometheus exposition
+          content:
+            text/plain:
+              schema: { type: string }
+  /api/v1/events/{eventId}/activity:
+    get:
+      tags: [feed]
+      operationId: getActivityFeed
+      summary: Fan activity feed (cursor-paginated projection of vote.cast / ticket.confirmed)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+        - name: cursor
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        "200":
+          description: Activity page
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActivityPage" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/v1/events/{eventId}/votes-per-minute:
+    get:
+      tags: [aggregates]
+      operationId: getVotesPerMinute
+      summary: Votes-per-minute series (expensive aggregation — conservative edge rate limit, R-04)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+        - name: from
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Series
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/VotesPerMinute" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    EventId:
+      name: eventId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    ValidationFailed:
+      description: VALIDATION_FAILED
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: NOT_FOUND
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: INTERNAL_ERROR
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    DependencyUnavailable:
+      description: DEPENDENCY_UNAVAILABLE — Mongo degraded; typed 503, not a 500
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok] }
+    Readiness:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ready, degraded] }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, ok]
+            properties:
+              name: { type: string }
+              ok: { type: boolean }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string }
+    ActivityEntry:
+      type: object
+      required: [id, eventId, type, summary, occurredAt]
+      properties:
+        id: { type: string, description: Source event id — dedupe key (B6) }
+        eventId: { type: string, format: uuid }
+        type: { type: string, enum: [vote.cast, ticket.confirmed] }
+        userId: { type: string, format: uuid }
+        summary: { type: string }
+        occurredAt: { type: string, format: date-time }
+    ActivityPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ActivityEntry" }
+        nextCursor: { type: [string, "null"] }
+    VotesPerMinutePoint:
+      type: object
+      required: [t, votes, points]
+      properties:
+        t: { type: string, format: date-time }
+        votes: { type: integer, minimum: 0 }
+        points: { type: integer, minimum: 0 }
+    VotesPerMinute:
+      type: object
+      required: [eventId, series]
+      properties:
+        eventId: { type: string, format: uuid }
+        series:
+          type: array
+          items: { $ref: "#/components/schemas/VotesPerMinutePoint" }

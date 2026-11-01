@@ -1,0 +1,359 @@
+openapi: 3.1.0
+info:
+  title: Eventista Commerce API
+  version: 0.1.0
+  description: >
+    Commerce bounded context (Spring Boot 4): order state machine
+    HELD → AWAITING_PAYMENT → SOLD | RELEASED, payments via PSP adapter
+    (mock in v2 — payments simulated), ticket inventory, ticket issuance.
+    event_id is an opaque FK (event-config rule, ADR-0001). Idempotency keys
+    scoped per user (Q-11); webhook signs raw bytes (Q-39/D-02).
+servers:
+  - url: /
+tags:
+  - name: health
+  - name: inventory
+  - name: orders
+  - name: payments
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness — datastore-independent
+      security: []
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness — 503 when degraded
+      security: []
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+        "503":
+          description: Degraded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+  /metrics:
+    get:
+      tags: [health]
+      operationId: getMetrics
+      summary: RED metrics — not routed via gateway
+      security: []
+      responses:
+        "200":
+          description: Prometheus exposition
+          content:
+            text/plain:
+              schema: { type: string }
+  /api/v1/events/{eventId}/inventory:
+    get:
+      tags: [inventory]
+      operationId: getInventory
+      summary: >
+        Ticket inventory for an event — composed by the web event page with
+        the vote catalog (event-config rule: no sync vote↔commerce call)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/EventId"
+      responses:
+        "200":
+          description: Inventory snapshot
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Inventory" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/v1/orders:
+    post:
+      tags: [orders]
+      operationId: holdOrder
+      summary: Hold seats — creates order in HELD with expiry (Idempotency-Key required)
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/HoldOrderRequest" }
+      responses:
+        "201":
+          description: Order held
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409":
+          description: INVENTORY_UNAVAILABLE or PURCHASE_LIMIT — no oversell, per-fan cap (Q-30)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/DependencyUnavailable" }
+  /api/v1/orders/{orderId}:
+    get:
+      tags: [orders]
+      operationId: getOrder
+      summary: Order detail (status machine + tickets once SOLD)
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+      responses:
+        "200":
+          description: Order
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Order" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /api/v1/orders/{orderId}/payments:
+    post:
+      tags: [payments]
+      operationId: createPayment
+      summary: >
+        Initiate payment (AWAITING_PAYMENT). One payment per order —
+        UNIQUE(order_id) → 409 on divergent retry (Q-10). Idempotency-Key
+        scoped per user (Q-11); missing header → 400 (D-07).
+      parameters:
+        - $ref: "#/components/parameters/OrderId"
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreatePaymentRequest" }
+      responses:
+        "202":
+          description: Payment INITIATED — confirmation arrives via state machine/webhook
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Payment" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: PAYMENT_STATE_CONFLICT — second payment attempt for the order (Q-10)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503":
+          description: DEPENDENCY_UNAVAILABLE — PSP breaker open / bulkhead full (R-19), typed degradation
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/v1/payments/webhook:
+    post:
+      tags: [payments]
+      operationId: pspWebhook
+      summary: >
+        PSP callback — HMAC over RAW request bytes (never re-serialised JSON,
+        D-02/R-02). Mock PSP only in v2 (payments simulated, Q-39).
+      security: []
+      parameters:
+        - name: X-PSP-Signature
+          in: header
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PspWebhook" }
+      responses:
+        "200":
+          description: Signature valid, effect applied idempotently (×10 → effect ×1)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [received]
+                properties:
+                  received: { type: boolean }
+        "400":
+          description: INVALID_SIGNATURE or malformed payload
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500": { $ref: "#/components/responses/InternalError" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  parameters:
+    EventId:
+      name: eventId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    OrderId:
+      name: orderId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Client-unique per operation; scoped UNIQUE(user_id, key) — 400 if missing/malformed (Q-11, D-07)
+      schema: { type: string, minLength: 8, maxLength: 128 }
+  responses:
+    ValidationFailed:
+      description: VALIDATION_FAILED (includes missing Idempotency-Key)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: UNAUTHORIZED
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: NOT_FOUND
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: RATE_LIMITED
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: INTERNAL_ERROR
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    DependencyUnavailable:
+      description: DEPENDENCY_UNAVAILABLE
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok] }
+    Readiness:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ready, degraded] }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, ok]
+            properties:
+              name: { type: string }
+              ok: { type: boolean }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string, examples: [VALIDATION_FAILED, PAYMENT_STATE_CONFLICT, INVENTORY_UNAVAILABLE, PURCHASE_LIMIT, INVALID_SIGNATURE, INTERNAL_ERROR, DEPENDENCY_UNAVAILABLE] }
+        message: { type: string }
+        requestId: { type: string }
+    Money:
+      type: object
+      required: [currency, amount]
+      properties:
+        currency: { type: string, examples: [VND] }
+        amount: { type: integer, description: minor units / whole VND }
+    InventoryItem:
+      type: object
+      required: [id, section, price, totalTickets, availableTickets]
+      properties:
+        id: { type: string, format: uuid }
+        section: { type: string }
+        price: { $ref: "#/components/schemas/Money" }
+        totalTickets: { type: integer, minimum: 0 }
+        availableTickets: { type: integer, minimum: 0 }
+        saleOpensAt: { type: string, format: date-time }
+        saleClosesAt: { type: string, format: date-time }
+    Inventory:
+      type: object
+      required: [eventId, items, maxTicketsPerUser]
+      properties:
+        eventId: { type: string, format: uuid, description: Opaque FK — commerce never syncs to vote }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/InventoryItem" }
+        maxTicketsPerUser: { type: integer, minimum: 1, default: 2, description: Per-fan cap (Q-30) }
+    OrderItem:
+      type: object
+      required: [inventoryItemId, quantity, unitPrice]
+      properties:
+        inventoryItemId: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1 }
+        unitPrice: { $ref: "#/components/schemas/Money" }
+    Ticket:
+      type: object
+      required: [id, referenceCode, section]
+      properties:
+        id: { type: string, format: uuid }
+        referenceCode: { type: string, description: Human-readable artefact shown to the fan (Q-28) }
+        section: { type: string }
+    Order:
+      type: object
+      required: [id, eventId, status, items, total, expiresAt]
+      properties:
+        id: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        status: { type: string, enum: [HELD, AWAITING_PAYMENT, SOLD, RELEASED] }
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/OrderItem" }
+        total: { $ref: "#/components/schemas/Money" }
+        expiresAt: { type: string, format: date-time, description: Hold expiry; sweeper releases (R-09 class) }
+        tickets:
+          type: array
+          items: { $ref: "#/components/schemas/Ticket" }
+          description: Present once status = SOLD
+    HoldOrderRequest:
+      type: object
+      required: [eventId, inventoryItemId, quantity]
+      properties:
+        eventId: { type: string, format: uuid }
+        inventoryItemId: { type: string, format: uuid }
+        quantity: { type: integer, minimum: 1, maximum: 10 }
+    CreatePaymentRequest:
+      type: object
+      required: [method]
+      properties:
+        method: { type: string, enum: [card, wallet], default: card }
+    Payment:
+      type: object
+      required: [id, orderId, status, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        status: { type: string, enum: [INITIATED, CAPTURED, FAILED, REFUNDED] }
+        amount: { $ref: "#/components/schemas/Money" }
+        createdAt: { type: string, format: date-time }
+    PspWebhook:
+      type: object
+      required: [orderId, event, providerRef]
+      properties:
+        orderId: { type: string, format: uuid }
+        event: { type: string, enum: [payment.captured, payment.failed, payment.refunded] }
+        providerRef: { type: string }
+        amount: { $ref: "#/components/schemas/Money" }

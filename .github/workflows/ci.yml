@@ -1,0 +1,192 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    name: contract (spectral + ownership + oasdiff + asyncapi)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: fetch oasdiff
+        run: |
+          mkdir -p .tools/bin
+          curl -sL -o /tmp/oasdiff.tgz "https://github.com/oasdiff/oasdiff/releases/download/v1.35.0/oasdiff_1.35.0_linux_amd64.tar.gz"
+          tar -xzf /tmp/oasdiff.tgz -C .tools/bin
+      - run: make contract
+
+  identity:
+    name: identity (lint + test + image)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: services/identity } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/identity/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: docker build -t eventista-identity:${{ github.sha }} .
+      - name: trivy image (identity, gating)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: eventista-identity:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+
+  voting:
+    name: voting (lint + test + image)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: services/voting } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/voting/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: docker build -t eventista-voting:${{ github.sha }} .
+      - name: trivy image (voting, gating)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: eventista-voting:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+
+  commerce:
+    name: commerce (lint + test + image)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: services/commerce } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+      - run: mvn -q -B -DskipTests compile
+      - run: mvn -q -B test
+      - run: docker build -t eventista-commerce:${{ github.sha }} .
+      - name: trivy image (commerce, gating)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: eventista-commerce:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+
+  analytics:
+    name: analytics (lint + test + image)
+    runs-on: ubuntu-latest
+    defaults: { run: { working-directory: services/analytics } }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --frozen || uv sync
+      - run: uv run ruff check app tests
+      - run: uv run pytest
+      - run: docker build -t eventista-analytics:${{ github.sha }} .
+      - name: trivy image (analytics, gating)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: eventista-analytics:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: '1'
+          format: table
+
+  migrate-test:
+    name: migrate-test (stub — real from Phase 2)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make migrate-test
+
+  stack:
+    name: kind e2e stack (slim compose — B4)
+    runs-on: ubuntu-latest
+    needs: [identity, voting, commerce, analytics]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: build + start slim stack
+        run: |
+          docker compose -f docker-compose.ci.yml build
+          docker compose -f docker-compose.ci.yml up -d --wait
+      - name: health endpoints respond
+        run: |
+          curl -fsS http://localhost:3011/healthz
+          curl -fsS http://localhost:3002/healthz
+          curl -fsS http://localhost:8081/healthz
+          curl -fsS http://localhost:8001/healthz
+      - name: teardown
+        if: always()
+        run: docker compose -f docker-compose.ci.yml down -v
+
+  security:
+    name: security (trivy + codeql — B7)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: trivy fs (high+critical, advisory)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          exit-code: '0'
+      - name: trivy config (misconfigurations, advisory)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          severity: HIGH,CRITICAL
+          format: table
+          exit-code: '0'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+          cache-dependency-path: services/commerce/pom.xml
+      - name: CodeQL init
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript, java, python
+      - name: build Java for CodeQL
+        working-directory: services/commerce
+        run: mvn -q -B -DskipTests package
+      - name: CodeQL analyze
+        uses: github/codeql-action/analyze@v3
+
+  # Lighthouse job added in Phase 5.5 (C4 — stub mode)
+  # kind e2e (make e2e) becomes required from Phase 1 (ground rule 7)

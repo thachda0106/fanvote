@@ -1,0 +1,234 @@
+asyncapi: 3.1.0
+info:
+  title: Eventista event bus
+  version: 0.1.0
+  description: >
+    Kafka integration contracts — the only cross-service data seam besides
+    OpenAPI (ADR-0002). JSON payloads, at-least-once, keyed by aggregate
+    (ADR-0003). Every channel MUST have >=1 producer and >=1 consumer
+    (checked against event-ownership.md by scripts/check-ownership.mjs).
+defaultContentType: application/json
+servers:
+  local-kafka:
+    host: kafka-0:9092
+    protocol: kafka-plaintext
+    description: KRaft x3 local (compose service DNS); Strimzi endpoint on EKS
+channels:
+  voteCast:
+    address: eventista.vote.cast
+    description: A ballot was accepted — feed projections (never truth)
+    messages:
+      voteCast:
+        $ref: "#/components/messages/voteCast"
+  orderHeld:
+    address: eventista.order.held
+    description: Seats reserved, order in HELD
+    messages:
+      orderHeld:
+        $ref: "#/components/messages/orderHeld"
+  paymentCaptured:
+    address: eventista.payment.captured
+    description: PSP capture succeeded
+    messages:
+      paymentCaptured:
+        $ref: "#/components/messages/paymentCaptured"
+  paymentFailed:
+    address: eventista.payment.failed
+    description: Payment failed — inventory released in the same tx (saga)
+    messages:
+      paymentFailed:
+        $ref: "#/components/messages/paymentFailed"
+  ticketConfirmed:
+    address: eventista.ticket.confirmed
+    description: Tickets issued for a SOLD order
+    messages:
+      ticketConfirmed:
+        $ref: "#/components/messages/ticketConfirmed"
+  notificationRequested:
+    address: eventista.notification.requested
+    description: Analytics asked for a fan-out (email/push stub in v2)
+    messages:
+      notificationRequested:
+        $ref: "#/components/messages/notificationRequested"
+operations:
+  produceVoteCast:
+    action: send
+    channel: { $ref: "#/channels/voteCast" }
+    summary: vote service outbox relay (T2.8)
+  consumeVoteCast:
+    action: receive
+    channel: { $ref: "#/channels/voteCast" }
+    summary: analytics consumer group `analytics` (T5.1)
+  produceOrderHeld:
+    action: send
+    channel: { $ref: "#/channels/orderHeld" }
+    summary: commerce outbox relay (T3.3)
+  consumeOrderHeld:
+    action: receive
+    channel: { $ref: "#/channels/orderHeld" }
+    summary: analytics consumer group `analytics`
+  producePaymentCaptured:
+    action: send
+    channel: { $ref: "#/channels/paymentCaptured" }
+    summary: commerce outbox relay
+  consumePaymentCaptured:
+    action: receive
+    channel: { $ref: "#/channels/paymentCaptured" }
+    summary: analytics consumer group `analytics`
+  producePaymentFailed:
+    action: send
+    channel: { $ref: "#/channels/paymentFailed" }
+    summary: commerce outbox relay
+  consumePaymentFailed:
+    action: receive
+    channel: { $ref: "#/channels/paymentFailed" }
+    summary: analytics consumer group `analytics`
+  produceTicketConfirmed:
+    action: send
+    channel: { $ref: "#/channels/ticketConfirmed" }
+    summary: commerce outbox relay (T3.3)
+  consumeTicketConfirmed:
+    action: receive
+    channel: { $ref: "#/channels/ticketConfirmed" }
+    summary: analytics consumer group `analytics` — also schema-checked by commerce CI (T5.1)
+  produceNotificationRequested:
+    action: send
+    channel: { $ref: "#/channels/notificationRequested" }
+    summary: analytics notify orchestrator
+  consumeNotificationRequested:
+    action: receive
+    channel: { $ref: "#/channels/notificationRequested" }
+    summary: analytics notify worker, consumer group `analytics-notify` (provider stub, Q-34)
+components:
+  messages:
+    voteCast:
+      name: voteCast
+      title: vote.cast
+      contentType: application/json
+      headers: { $ref: "#/components/schemas/commonHeaders" }
+      payload: { $ref: "#/components/schemas/voteCastPayload" }
+      examples:
+        - name: minimal
+          payload:
+            candidateId: 3f0a1c2e-0000-4000-8000-000000000001
+            points: 3
+            userId: 3f0a1c2e-0000-4000-8000-000000000002
+    orderHeld:
+      name: orderHeld
+      title: order.held
+      contentType: application/json
+      headers: { $ref: "#/components/schemas/commonHeaders" }
+      payload: { $ref: "#/components/schemas/orderHeldPayload" }
+    paymentCaptured:
+      name: paymentCaptured
+      title: payment.captured
+      contentType: application/json
+      headers: { $ref: "#/components/schemas/commonHeaders" }
+      payload: { $ref: "#/components/schemas/paymentPayload" }
+    paymentFailed:
+      name: paymentFailed
+      title: payment.failed
+      contentType: application/json
+      headers: { $ref: "#/components/schemas/commonHeaders" }
+      payload: { $ref: "#/components/schemas/paymentPayload" }
+    ticketConfirmed:
+      name: ticketConfirmed
+      title: ticket.confirmed
+      contentType: application/json
+      headers: { $ref: "#/components/schemas/commonHeaders" }
+      payload: { $ref: "#/components/schemas/ticketConfirmedPayload" }
+    notificationRequested:
+      name: notificationRequested
+      title: notification.requested
+      contentType: application/json
+      headers: { $ref: "#/components/schemas/commonHeaders" }
+      payload: { $ref: "#/components/schemas/notificationRequestedPayload" }
+  schemas:
+    commonHeaders:
+      type: object
+      required: [id, type, occurredAt, producer, aggregateId, aggregateType]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique event id — consumer dedupe key (B6)
+        type:
+          type: string
+          description: Event type, e.g. vote.cast
+        occurredAt:
+          type: string
+          format: date-time
+        producer:
+          type: string
+          enum: [identity, vote, commerce, analytics]
+        aggregateId:
+          type: string
+          description: Partition key value (order_id / event_id)
+        aggregateType:
+          type: string
+          enum: [order, event]
+        traceparent:
+          type: string
+          description: W3C trace context propagated from HTTP through the bus (T1.4)
+        correlationId:
+          type: string
+    voteCastPayload:
+      type: object
+      required: [eventId, candidateId, points, userId]
+      properties:
+        eventId: { type: string, format: uuid }
+        candidateId: { type: string, format: uuid }
+        points: { type: integer, minimum: 1, maximum: 10 }
+        userId: { type: string, format: uuid }
+    orderHeldPayload:
+      type: object
+      required: [orderId, eventId, userId, expiresAt, total]
+      properties:
+        orderId: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        expiresAt: { type: string, format: date-time }
+        total:
+          type: object
+          required: [currency, amount]
+          properties:
+            currency: { type: string }
+            amount: { type: integer }
+    paymentPayload:
+      type: object
+      required: [paymentId, orderId, status]
+      properties:
+        paymentId: { type: string, format: uuid }
+        orderId: { type: string, format: uuid }
+        status: { type: string, enum: [CAPTURED, FAILED] }
+        reason: { type: string, description: Failure reason when status=FAILED }
+    ticketConfirmedPayload:
+      type: object
+      required: [orderId, eventId, userId, tickets]
+      properties:
+        orderId: { type: string, format: uuid }
+        eventId: { type: string, format: uuid }
+        userId: { type: string, format: uuid }
+        tickets:
+          type: array
+          minItems: 1
+          items:
+            type: object
+            required: [id, referenceCode]
+            properties:
+              id: { type: string, format: uuid }
+              referenceCode: { type: string }
+              section: { type: string }
+    notificationRequestedPayload:
+      type: object
+      required: [userId, channel, templateId, data]
+      properties:
+        userId: { type: string, format: uuid }
+        channel: { type: string, enum: [email, push] }
+        templateId: { type: string, enum: [ticket-confirmed] }
+        data:
+          type: object
+          required: [orderId]
+          properties:
+            orderId: { type: string, format: uuid }
+            eventName: { type: string }

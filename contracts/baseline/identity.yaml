@@ -1,0 +1,297 @@
+openapi: 3.1.0
+info:
+  title: Eventista Identity API
+  version: 0.1.0
+  description: >
+    Identity bounded context: OAuth2 authorization-code + PKCE, RS256 JWTs,
+    JWKS endpoint, opaque refresh tokens with rotation + family revocation.
+    Is the IdP (Q-38); mock-IdP mode = test profile with the same signing
+    path (C-A2, ADR-0007).
+servers:
+  - url: /
+tags:
+  - name: health
+  - name: auth
+  - name: users
+security:
+  - bearerAuth: []
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness — datastore-independent
+      security: []
+      responses:
+        "200":
+          description: Process is alive
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness — 503 when degraded
+      security: []
+      responses:
+        "200":
+          description: Ready
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+        "503":
+          description: Degraded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Readiness" }
+  /metrics:
+    get:
+      tags: [health]
+      operationId: getMetrics
+      summary: RED metrics — not routed via gateway
+      security: []
+      responses:
+        "200":
+          description: Prometheus exposition
+          content:
+            text/plain:
+              schema: { type: string }
+  /jwks:
+    get:
+      tags: [auth]
+      operationId: getJwks
+      summary: JWKS — remote source for gateway + service verification (ADR-0007)
+      security: []
+      responses:
+        "200":
+          description: "Current signing keys (kid rotation: publish both, retire after max TTL)"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Jwks" }
+  /api/v1/auth/login:
+    get:
+      tags: [auth]
+      operationId: startLogin
+      summary: OAuth2 authorization-code + PKCE — redirect to IdP (self, Q-38)
+      security: []
+      parameters:
+        - name: redirect_uri
+          in: query
+          required: true
+          schema: { type: string, format: uri }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect to the authorization endpoint
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "429":
+          description: RATE_LIMITED — refresh/login flood hits gateway first (R-04)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/v1/auth/callback:
+    get:
+      tags: [auth]
+      operationId: authCallback
+      summary: OAuth callback — flow state in Redis, 10-min TTL (Q-05/D-11)
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "302":
+          description: Redirect back to the client with a one-time app code
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401":
+          description: INVALID_STATE — unknown/expired flow (no stickiness required)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/v1/auth/token:
+    post:
+      tags: [auth]
+      operationId: exchangeToken
+      summary: Exchange app code (or refresh token) for tokens
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                grantType: { type: string, enum: [authorization_code, refresh_token] }
+                code: { type: string }
+                refreshToken: { type: string }
+                codeVerifier: { type: string }
+      responses:
+        "200":
+          description: Token pair issued (RS256, JWKS-verifiable)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+        "401":
+          description: INVALID_GRANT — unknown code, expired flow, or refresh reuse (family revoked, Q-20)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          description: RATE_LIMITED
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/v1/auth/test-token:
+    post:
+      tags: [auth]
+      operationId: mintTestToken
+      summary: >
+        Test-profile only: mint a signed token without the OAuth dance (mock
+        IdP, C-A2 / T1.3). Same RS256 + JWKS path; not mounted outside test.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [sub]
+              properties:
+                sub: { type: string }
+                email: { type: string, format: email }
+                roles:
+                  type: array
+                  items: { type: string }
+                ttlSeconds: { type: integer, minimum: 30, maximum: 86400, default: 3600 }
+      responses:
+        "200":
+          description: Signed access token
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenPair" }
+        "404":
+          description: NOT_FOUND — endpoint disabled outside the test profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/v1/auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Revoke the presented refresh token (family revocation on reuse)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string }
+      responses:
+        "204": { description: Revoked (idempotent) }
+        "400": { $ref: "#/components/responses/ValidationFailed" }
+  /api/v1/users/me:
+    get:
+      tags: [users]
+      operationId: getMe
+      summary: Current user from the verified JWT
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "500": { $ref: "#/components/responses/InternalError" }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  responses:
+    ValidationFailed:
+      description: VALIDATION_FAILED
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: UNAUTHORIZED
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: INTERNAL_ERROR
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok] }
+    Readiness:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ready, degraded] }
+        checks:
+          type: array
+          items:
+            type: object
+            required: [name, ok]
+            properties:
+              name: { type: string }
+              ok: { type: boolean }
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+        requestId: { type: string }
+    Jwks:
+      type: object
+      required: [keys]
+      properties:
+        keys:
+          type: array
+          items:
+            type: object
+            required: [kty, kid, n, e]
+            properties:
+              kty: { type: string, enum: [RSA] }
+              use: { type: string, enum: [sig] }
+              alg: { type: string, enum: [RS256] }
+              kid: { type: string }
+              n: { type: string }
+              e: { type: string }
+    TokenPair:
+      type: object
+      required: [accessToken, refreshToken, tokenType, expiresIn]
+      properties:
+        accessToken: { type: string, description: RS256 JWT }
+        refreshToken: { type: string, description: Opaque, rotated on every use }
+        tokenType: { type: string, enum: [Bearer] }
+        expiresIn: { type: integer, description: seconds }
+    User:
+      type: object
+      required: [id, email, roles]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        roles:
+          type: array
+          items: { type: string }

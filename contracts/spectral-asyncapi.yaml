@@ -1,0 +1,17 @@
+extends:
+  - spectral:asyncapi
+rules:
+  asyncapi-info-contact: warn
+  asyncapi-info-description: warn
+  asyncapi-info-license: warn
+  asyncapi-tag-description: warn
+  asyncapi-operation-description: warn
+  asyncapi-payload-examples: warn
+  asyncapi-schema-examples: warn
+  asyncapi-message-messageId-uniqueness: error
+  asyncapi-operation-operationId-uniqueness: error
+  asyncapi-headers-schema-type-object: error
+  asyncapi-payload: error
+  asyncapi-schema: error
+  asyncapi-channel-no-trailing-slash: error
+  asyncapi-unused-components-schema: warn

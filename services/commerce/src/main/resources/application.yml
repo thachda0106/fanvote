@@ -1,0 +1,15 @@
+server:
+  port: 8081
+  # Run with -Duser.timezone=UTC (T0.6 / README) — quota windows are GMT+7
+  # business-wise but all storage timestamps are UTC.
+
+spring:
+  application:
+    name: commerce
+  main:
+    banner-mode: "off"
+
+logging:
+  # Structured-ish access to stdout; full JSON + correlation id in Phase 1 (T1.4)
+  level:
+    root: INFO

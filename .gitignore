@@ -1,0 +1,38 @@
+# deps / build
+node_modules/
+dist/
+build/
+target/
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+coverage/
+*.tsbuildinfo
+.tsbuildinfo
+
+# tools (auto-fetched)
+.tools/
+
+# env / secrets — never commit
+.env
+.env.*
+!.env.example
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.pem
+!services/commerce/src/test/resources/**/*.pem
+
+# logs / reports
+*.log
+load/k6/reports/*.json
+
+# os / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

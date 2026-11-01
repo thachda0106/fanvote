@@ -1,0 +1,193 @@
+# Full local stack (plan T0.5): 2 PG (vote=PostGIS, app=identity+commerce),
+# Redis, Mongo, Kafka x3 KRaft, Jaeger + the four service skeletons.
+# Host ports remapped for Windows (native PG grabs :5432) — inside the
+# compose network standard ports apply. CI uses docker-compose.ci.yml
+# (1 broker, no Jaeger — review finding B4, 7 GB runner).
+name: eventista2
+
+x-logging: &default-logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+services:
+  # ---- datastores ---------------------------------------------------------
+  pg-vote:
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: eventista
+      POSTGRES_PASSWORD: eventista
+      POSTGRES_DB: vote
+    ports:
+      - "55432:5432"
+    volumes:
+      - pg-vote-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eventista -d vote"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *default-logging
+
+  pg-app:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: eventista
+      POSTGRES_PASSWORD: eventista
+      POSTGRES_DB: commerce
+    ports:
+      - "55433:5432"
+    volumes:
+      - pg-app-data:/var/lib/postgresql/data
+      - ./deploy/compose/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U eventista -d commerce"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *default-logging
+
+  redis:
+    image: redis:7.4-alpine
+    # fail-loud posture (ADR-0004): never silently evict vote keys
+    command: ["redis-server", "--maxmemory", "512mb", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *default-logging
+
+  mongo:
+    image: mongo:7.0
+    ports:
+      - "57017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    logging: *default-logging
+
+  # ---- Kafka KRaft x3 (gate 5) — official apache/kafka image ------------
+  kafka-0:
+    image: apache/kafka:3.8.0
+    environment: &kafka-common
+      CLUSTER_ID: "eventista2cluster0x"
+      KAFKA_NODE_ID: "0"
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "0@kafka-0:9093,1@kafka-1:9093,2@kafka-2:9093"
+      # Dual listeners: INTERNAL for broker/healthcheck traffic (in-network
+      # DNS), EXTERNAL for host clients. Host ports 19092-19094 because this
+      # box already runs other projects on 9092/9093 (README toolchain notes).
+      KAFKA_LISTENERS: "INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:19092"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-0:9092,EXTERNAL://localhost:19092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "3"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "3"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "3"
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+      KAFKA_LOG_RETENTION_HOURS: "24"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+    ports:
+      - "19092:19092"
+    volumes:
+      - kafka-0-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+    logging: *default-logging
+
+  kafka-1:
+    image: apache/kafka:3.8.0
+    environment:
+      <<: *kafka-common
+      KAFKA_NODE_ID: "1"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-1:9092,EXTERNAL://localhost:19093"
+    ports:
+      - "19093:19092"
+    volumes:
+      - kafka-1-data:/var/lib/kafka/data
+    depends_on:
+      kafka-0: { condition: service_started }
+    logging: *default-logging
+
+  kafka-2:
+    image: apache/kafka:3.8.0
+    environment:
+      <<: *kafka-common
+      KAFKA_NODE_ID: "2"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-2:9092,EXTERNAL://localhost:19094"
+    ports:
+      - "19094:19092"
+    volumes:
+      - kafka-2-data:/var/lib/kafka/data
+    depends_on:
+      kafka-0: { condition: service_started }
+    logging: *default-logging
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686" # UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+    logging: *default-logging
+
+  # ---- services (Phase 0 skeletons — only observability endpoints) -------
+  identity:
+    build: ./services/identity
+    environment:
+      PORT: "3001"
+    ports:
+      # host 3011: this box's geotrack-grafana already owns host 3001
+      - "3011:3001"
+    depends_on:
+      pg-app: { condition: service_healthy }
+    logging: *default-logging
+
+  voting:
+    build: ./services/voting
+    environment:
+      PORT: "3002"
+    ports:
+      - "3002:3002"
+    depends_on:
+      pg-vote: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    logging: *default-logging
+
+  commerce:
+    build: ./services/commerce
+    ports:
+      - "8081:8081"
+    depends_on:
+      pg-app: { condition: service_healthy }
+    logging: *default-logging
+
+  analytics:
+    build: ./services/analytics
+    ports:
+      - "8001:8001"
+    depends_on:
+      mongo: { condition: service_healthy }
+    logging: *default-logging
+
+volumes:
+  pg-vote-data:
+  pg-app-data:
+  mongo-data:
+  kafka-0-data:
+  kafka-1-data:
+  kafka-2-data:
