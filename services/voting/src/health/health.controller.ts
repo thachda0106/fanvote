@@ -1,25 +1,30 @@
-import { Controller, Get, Header } from '@nestjs/common';
-import { Registry, collectDefaultMetrics } from 'prom-client';
-
-const registry = new Registry();
-collectDefaultMetrics({ register: registry });
+import { Controller, Get, Header, Res } from '@nestjs/common';
+import type { Response } from 'express';
+import { registry } from '../common/metrics';
+import { DbService } from '../db/db.service';
 
 /**
- * Observability-only surface (T0.5): /healthz liveness is datastore-
- * independent; /readyz returns 503 when degraded (D-12 — checks wired in
- * Phase 6, never boot-fail on a datastore blip, R-17); /metrics exposes RED.
+ * Observability surface (T1.6): /healthz liveness is datastore-independent;
+ * /readyz returns 503 when the vote DB is unreachable (degraded — product
+ * rule, D-12); /metrics exposes RED + outbox backlog. Never routed via the
+ * gateway (Q-22).
  */
 @Controller()
 export class HealthController {
+  constructor(private readonly db: DbService) {}
+
   @Get('healthz')
   healthz(): { status: 'ok' } {
     return { status: 'ok' };
   }
 
   @Get('readyz')
-  readyz(): { status: 'ready' | 'degraded'; checks: { name: string; ok: boolean }[] } {
-    // Phase 0: no datastore checks yet. Phase 6 adds them and flips to 503.
-    return { status: 'ready', checks: [] };
+  async readyz(
+    @Res({ passthrough: true }) res: Response,
+  ): Promise<{ status: 'ready' | 'degraded'; checks: { name: string; ok: boolean }[] }> {
+    const pg = await this.db.ping();
+    if (!pg) res.status(503);
+    return { status: pg ? 'ready' : 'degraded', checks: [{ name: 'postgres', ok: pg }] };
   }
 
   @Get('metrics')

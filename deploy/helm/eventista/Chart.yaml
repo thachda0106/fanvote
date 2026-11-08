@@ -1,0 +1,9 @@
+apiVersion: v2
+name: eventista
+description: >-
+  Eventista v2 walking skeleton — Envoy Gateway (G-A/ADR-0007), four services,
+  OTel collector + Jaeger. Chart assumes Envoy Gateway control plane + CRDs are
+  installed separately (make deploy-kind).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

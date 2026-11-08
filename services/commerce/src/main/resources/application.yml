@@ -9,7 +9,14 @@ spring:
   main:
     banner-mode: "off"
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,prometheus"
+
 logging:
-  # Structured-ish access to stdout; full JSON + correlation id in Phase 1 (T1.4)
+  # JSON encoder config lives in logback-spring.xml (T1.6); correlation id is
+  # injected by ObservabilityFilter, trace ids by the OTel Java agent.
   level:
     root: INFO

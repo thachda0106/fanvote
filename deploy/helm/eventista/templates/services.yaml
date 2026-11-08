@@ -1,0 +1,128 @@
+{{- define "eventista.env" -}}
+{{- $root := index . "root" -}}
+{{- $name := index . "name" -}}
+{{- range $k, $v := (index $root.Values.serviceEnv $name | default dict) }}
+- name: {{ $k }}
+  value: {{ $v | quote }}
+{{- end }}
+{{- if or (eq $name "identity") (eq $name "voting") }}
+- name: JWT_ISSUER
+  value: {{ $root.Values.jwt.issuer | quote }}
+- name: JWT_AUDIENCE
+  value: {{ $root.Values.jwt.audience | quote }}
+{{- end }}
+{{- if and (eq $name "voting") $root.Values.jwt.jwksUri }}
+- name: JWKS_URL
+  value: {{ $root.Values.jwt.jwksUri | quote }}
+{{- end }}
+- name: OTEL_SERVICE_NAME
+  value: {{ $name | quote }}
+{{- if $root.Values.otel.exporterEndpoint }}
+- name: OTEL_EXPORTER_OTLP_ENDPOINT
+  value: {{ $root.Values.otel.exporterEndpoint | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "eventista.podSpec" -}}
+{{- $root := index . "root" -}}
+{{- $name := index . "name" -}}
+{{- $port := index . "port" -}}
+{{- with $root.Values.hostAliases }}
+hostAliases:
+{{ toYaml . | nindent 2 }}
+{{- end }}
+containers:
+  - name: {{ $name }}
+    image: "{{ (index $root.Values.images $name).repository }}:{{ (index $root.Values.images $name).tag }}"
+    imagePullPolicy: {{ $root.Values.imagePullPolicy }}
+    ports:
+      - name: http
+        containerPort: {{ $port }}
+    env:
+{{ include "eventista.env" (dict "root" $root "name" $name) | nindent 6 }}
+    startupProbe:
+      httpGet:
+        path: /healthz
+        port: http
+      periodSeconds: 3
+      failureThreshold: 40
+    readinessProbe:
+      httpGet:
+        path: /readyz
+        port: http
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      failureThreshold: 6
+    livenessProbe:
+      httpGet:
+        path: /healthz
+        port: http
+      periodSeconds: 10
+{{- if eq $name "commerce" }}
+    resources:
+      requests:
+        cpu: 100m
+        memory: 192Mi
+      limits:
+        cpu: "1"
+        memory: 768Mi
+{{- else }}
+    resources:
+      requests:
+        cpu: 50m
+        memory: 96Mi
+      limits:
+        cpu: 500m
+        memory: 384Mi
+{{- end }}
+{{- end -}}
+
+{{- $services := list
+  (dict "name" "identity" "port" 3001)
+  (dict "name" "voting" "port" 3002)
+  (dict "name" "commerce" "port" 8081)
+  (dict "name" "analytics" "port" 8001) }}
+{{- range $services }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ .name }}
+    {{- include "eventista.labels" $ | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .name }}
+    spec:
+{{- if eq .name "commerce" }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 100
+{{- end }}
+{{ include "eventista.podSpec" (dict "root" $ "name" .name "port" .port) | nindent 6 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app: {{ .name }}
+    {{- include "eventista.labels" $ | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ .name }}
+  ports:
+    - name: http
+      port: {{ .port }}
+      targetPort: http
+{{- end }}

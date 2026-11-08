@@ -1,0 +1,45 @@
+# Defaults (kind-oriented). values-kind.yaml adds compose datastore endpoints.
+images:
+  identity:
+    repository: eventista/identity
+    tag: kind
+  voting:
+    repository: eventista/voting
+    tag: kind
+  commerce:
+    repository: eventista/commerce
+    tag: kind
+  analytics:
+    repository: eventista/analytics
+    tag: kind
+imagePullPolicy: IfNotPresent
+
+# kind pods reach host-published compose ports via host.docker.internal;
+# the Docker Desktop gateway IP is pinned per environment (verified on this box).
+hostAliases: []
+
+otel:
+  # Base OTLP/HTTP endpoint (services append /v1/traces, collector listens 4318).
+  exporterEndpoint: ""
+
+jwt:
+  issuer: https://identity.eventista.local
+  audience: eventista-api
+  jwksUri: ""
+
+# Edge pre-filter only — services verify authoritatively (ADR-0007).
+rateLimits:
+  defaultRequestsPerMinute: 600
+  analyticsRequestsPerMinute: 60
+
+gateway:
+  serviceType: ClusterIP
+  httpNodePort: 30080
+
+observability:
+  enabled: true
+  jaegerImage: jaegertracing/all-in-one:1.57
+  collectorImage: otel/opentelemetry-collector-contrib:0.111.0
+
+# Per-service extra env (merged key-by-key into the pod env).
+serviceEnv: {}

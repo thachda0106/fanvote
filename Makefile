@@ -12,10 +12,15 @@ SHELL := bash
 
 OASDIFF := .tools/bin/oasdiff$(if $(findstring Windows_NT,$(OS)),.exe,)
 OASDIFF_VERSION := 1.35.0
+KIND := .tools/kind$(if $(findstring Windows_NT,$(OS)),.exe,)
+HELM := .tools/bin/helm$(if $(findstring Windows_NT,$(OS)),.exe,)
+K6 := .tools/bin/k6$(if $(findstring Windows_NT,$(OS)),.exe,)
+EG_VERSION ?= v1.9.3
 SERVICES_JS := services/identity services/voting
+SERVICE_IMAGES := eventista/identity:kind eventista/voting:kind eventista/commerce:kind eventista/analytics:kind
 
 .PHONY: help install up down lint test contract e2e migrate-test load \
-	web-lighthouse chaos kind-up deploy-kind smoke tools seed fmt
+	web-lighthouse chaos kind-up kind-load deploy-kind smoke token tools seed fmt
 
 help: ## list targets with one-line descriptions
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
@@ -68,8 +73,8 @@ contract: tools ## spectral + ownership + oasdiff breaking vs baseline + asyncap
 migrate-test: ## fresh init · upgrade-from-previous · expand-contract (no-op on empty schemas until Phase 2/3)
 	bash scripts/migrate-test.sh
 
-e2e: ## Phase 1+: kind + full stack + trace assertion + async doc <1s
-	@echo "STUB: make e2e starts in Phase 1 (walking skeleton)" && exit 0
+e2e: smoke ## Phase 1+: smoke + trace assertion + async doc <1s
+	bash scripts/e2e.sh
 
 load: ## Phase 2+: k6 vs the phase target (relative numbers locally, G-C)
 	@echo "STUB: make load starts in Phase 2 (vote-ramp)" && exit 0
@@ -80,14 +85,34 @@ web-lighthouse: ## Phase 5.5+: LHCI perf ≥ 90, CLS < 0.1 (stub mode)
 chaos: ## Phase 6+: failure modes executable; every alert fired by Phase 8
 	@echo "STUB: make chaos starts in Phase 6" && exit 0
 
-kind-up: ## Phase 1+: kind cluster (kindest/node:v1.34.2 — cgroup v1 pin)
-	@echo "STUB: make kind-up starts in Phase 1 (Task 1.1)" && exit 0
+kind-up: ## Phase 1+: kind cluster (kindest/node:v1.34.2 — G-I pin)
+	@$(KIND) get clusters 2>/dev/null | grep -qx eventista || \
+		$(KIND) create cluster --config deploy/helm/kind-config.yaml
+	@kubectl config current-context
+	@kubectl get nodes
 
-deploy-kind: ## Phase 1+: load images into kind + helm install
-	@echo "STUB: make deploy-kind starts in Phase 1 (Task 1.2)" && exit 0
+kind-load: ## Phase 1+: build 4 service images + load into kind (no registry)
+	@for s in identity voting commerce analytics; do \
+		echo "-- build $$s"; docker build -q -t eventista/$$s:kind services/$$s || exit 1; \
+	done
+	$(KIND) load docker-image $(SERVICE_IMAGES) --name eventista
+
+deploy-kind: kind-load ## Phase 1+: Envoy Gateway + images + helm install
+	$(HELM) upgrade --install eg oci://docker.io/envoyproxy/gateway-helm \
+		--version $(EG_VERSION) -n envoy-gateway-system --create-namespace \
+		--wait --timeout 5m
+	$(HELM) upgrade --install eventista deploy/helm/eventista \
+		-n eventista --create-namespace \
+		-f deploy/helm/eventista/values-kind.yaml --wait --timeout 10m
 
 smoke: ## Phase 1+: 10 RPS through gateway to every service
-	@echo "STUB: make smoke starts in Phase 1 (Task 1.2)" && exit 0
+	$(K6) run --quiet load/k6/smoke.js
+
+token: ## Phase 1+: print a dev JWT (USER=fan-1)
+	@curl -fsS -X POST http://localhost:8080/api/v1/identity/auth/test-token \
+		-H 'content-type: application/json' \
+		-d '{"sub":"$(or $(USER),fan-1)"}' | \
+		sed -n 's/.*"accessToken":"\([^"]*\)".*/\1/p'
 
 seed: ## Phase 2+: test-data factory (users, events, k6 cohorts)
 	@echo "STUB: make seed starts in Phase 2 (Task 2.1)" && exit 0

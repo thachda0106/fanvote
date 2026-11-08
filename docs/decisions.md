@@ -360,11 +360,25 @@ committed first (Q-35, ADR-0005). Local kind/docker work needs no permission.
 | Next.js | `15.5.28` (G-I: deliberate 15, not 16) | `npm view next@15` → 15.5.28; app code lands Phase 5.5 |
 | FastAPI stack | fastapi `0.162.0`, uvicorn `0.54.0`, prometheus-client `0.26.0`, pydantic `2.14.2`, structlog `26.1.0` | `uv sync` OK; `uv run pytest` green (3 tests) |
 | Python dev tools | pytest `9.2.0`, httpx `0.28.1`, ruff `0.17.3` | `uv run ruff check` + `pytest` green |
-| kind node image | `kindest/node:v1.34.2` | cgroup-v1 hard-refuses k8s ≥ 1.35 on this box (verified pitfall, v1/plan) — applied in Phase 1 T1.1 |
-| Envoy Gateway (G-A) | release **v1.9.3** (chart pin finalized at T1.2 install) | GitHub `envoyproxy/gateway` latest = v1.9.3 |
+| kind node image | `kindest/node:v1.34.2` | Phase 1 fresh create (2026-11-08) → 3 nodes Ready in <1 min; v1.37.0 also booted (cgroup v2) but the G-I pin is what the gate ran on |
+| Envoy Gateway (G-A) | release **v1.9.3** (chart pin finalized at T1.2 install) | `helm upgrade --install eg oci://docker.io/envoyproxy/gateway-helm --version v1.9.3` succeeded; chart bundles Gateway API CRDs v1.6.1 (experimental) + EG CRDs |
 | oasdiff (contract gate) | `1.35.0` (`.tools/bin/oasdiff`, auto-fetched by `make tools`) | breaking gate run: pass on baseline==current, exit 1 on removed response field |
 | Docker images | `node:22.23.4-alpine`, `maven:3.9.11-eclipse-temurin-21`, `eclipse-temurin:21-jre-alpine`, `python:3.12.12-slim`, `apache/kafka:3.8.0` | all pulled OK on this host; pinned in Dockerfiles/compose (bitnami/kafka **not** used — tags discontinued, switched to official apache/kafka) |
 
 **Host gotchas confirmed:** `JAVA_HOME` → JDK 21 (Maven ignores older PATH
 `java` 15); Boot 4 needs `@AutoConfigureMockMvc` (split test starter); GNU
 Make 4.4.1 installed user-level (scoop) because the box had no `make`.
+## Phase 1 implementation decisions (2026-11-08)
+
+| # | Decision | Why / consequence |
+|---|---|---|
+| P1-1 | **Mock IdP signs for real** (RS256 keypair per boot, JWKS with thumbprint `kid`, same `iss`/`aud`/claims) | T1.3/A2: Phase 4 changes token minting/distribution, not verification. Caveat: one keypair per process → identity stays single-replica until Phase 4. |
+| P1-2 | **Public paths are service-namespaced, backends keep contract paths** | `/api/v1/{identity\|votes\|commerce\|analytics}/...` → `URLRewrite ReplacePrefixMatch /api/v1` → `/api/v1/...`. `contracts/` stays the only backend path truth. |
+| P1-3 | **Edge JWT is a pre-filter, not the authority** | `SecurityPolicy jwt.optional=true`: no token passes (public routes), present-but-invalid → 401. Services verify locally from cached JWKS (ADR-0007). |
+| P1-4 | **Edge rate limits: 600/min identity/votes/commerce, 60/min analytics** | Phase 1 defaults, tuned in Phase 4 (v1 R-04). Local (per-replica) buckets; smoke proves 429s on the analytics burst. |
+| P1-5 | **Envoy Service NodePort patch forces `externalTrafficPolicy: Cluster`** | kind publishes the host port on the control-plane node; with EG's default `Local`, a proxy pod on another worker blackholes :8080. |
+| P1-6 | **Compose Kafka gains a KIND listener (19095–19097)** | Pods reach compose datastores via `host.docker.internal` (hostAlias pinned to 192.168.65.254); EXTERNAL advertises `localhost` and is unusable from pods. |
+| P1-7 | **Commerce is DB-less in Phase 1** | Fixed inventory snapshot on `/api/v1/events/{id}/inventory`; the DB span requirement is satisfied by voting's outbox transaction. Flyway/PG lands T3.6. |
+| P1-8 | **OTel Java agent v2.33.1, traces only** | `OTEL_METRICS_EXPORTER=none`, `OTEL_LOGS_EXPORTER=none`; the collector pipeline is traces-only. |
+| P1-9 | **Analytics stores `occurredAt` as a BSON datetime and `_id` = message id** | Correct sort/`$dateTrunc` aggregation and B6 idempotent upserts. Feed cursor is keyset on `(occurredAt, _id)`. |
+| P1-10 | **Outbox producer send runs inside `context.with(producer span)`** | KafkaJS auto-instrumentation otherwise starts a root trace and overwrites `traceparent`; the consumer would link to the wrong trace. |

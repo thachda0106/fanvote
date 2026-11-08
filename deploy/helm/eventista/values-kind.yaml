@@ -1,0 +1,36 @@
+# kind overlay: datastores stay in compose (ports published on the host) and
+# pods reach them through host.docker.internal via a pinned hostAlias.
+gateway:
+  serviceType: NodePort
+  httpNodePort: 30080
+
+otel:
+  exporterEndpoint: http://otel-collector.eventista.svc.cluster.local:4318
+
+jwt:
+  jwksUri: http://identity.eventista.svc.cluster.local:3001/jwks
+
+hostAliases:
+  - ip: 192.168.65.254
+    hostnames:
+      - host.docker.internal
+
+serviceEnv:
+  identity:
+    PORT: "3001"
+    AUTH_MODE: test
+  voting:
+    PORT: "3002"
+    DATABASE_URL: postgresql://eventista:eventista@host.docker.internal:55432/vote
+    KAFKA_BROKERS: host.docker.internal:19095,host.docker.internal:19096,host.docker.internal:19097
+    # test-only relay control for the T1.5 negative assertion (kind only).
+    E2E_CONTROL: "true"
+  commerce:
+    OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+    # Collector has a traces pipeline only; silence the agent's metrics/logs.
+    OTEL_METRICS_EXPORTER: none
+    OTEL_LOGS_EXPORTER: none
+  analytics:
+    MONGO_URL: mongodb://host.docker.internal:57017/analytics
+    KAFKA_BROKERS: host.docker.internal:19095,host.docker.internal:19096,host.docker.internal:19097
+    CONSUMER_ENABLED: "true"

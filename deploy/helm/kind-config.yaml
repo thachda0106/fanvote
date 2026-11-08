@@ -1,0 +1,26 @@
+# Phase 1 / T1.1 — local walking-skeleton cluster.
+#
+# G-I freezes kindest/node:v1.34.2 (originally because Docker Desktop's
+# cgroup v1 refuses k8s >= 1.35). A fresh create on 2026-11-08 with v1.37.0
+# also came up Ready (Docker now reports cgroup v2), but the approved pin is
+# what the phase gate runs on until G-I is revisited.
+#
+# Host 8080 -> node 30080 (Envoy Gateway HTTP NodePort)
+# Host 8443 -> node 30081 (reserved for the TLS listener in a later phase)
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: eventista
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.34.2
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8080
+        protocol: TCP
+      - containerPort: 30081
+        hostPort: 8443
+        protocol: TCP
+  - role: worker
+    image: kindest/node:v1.34.2
+  - role: worker
+    image: kindest/node:v1.34.2

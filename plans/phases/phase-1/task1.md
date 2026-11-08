@@ -8,15 +8,15 @@ Local Kubernetes that reliably starts on this machine.
 
 ## Subtasks
 
-- [ ] Create `deploy/helm/kind-config.yaml` — 1 control-plane + 2 workers,
+- [x] Create `deploy/helm/kind-config.yaml` — 1 control-plane + 2 workers,
       port mappings for gateway/ingress (80/443 → node port).
-- [ ] `make kind-up`: `kind create cluster --config deploy/helm/kind-config.yaml
+- [x] `make kind-up`: `kind create cluster --config deploy/helm/kind-config.yaml
       --image kindest/node:v1.34.2`.
-- [ ] **Pitfall (verified on this box):** Docker Desktop cgroup v1 hard-refuses
+- [x] **Pitfall (verified on this box):** Docker Desktop cgroup v1 hard-refuses
       k8s ≥ 1.35 — never bump the node image without re-testing.
-- [ ] `make kind-load` target: build 4 service images + `kind load docker-image`
+- [x] `make kind-load` target: build 4 service images + `kind load docker-image`
       (no registry needed locally).
-- [ ] kubectl context check + `kubectl get nodes` Ready ×3 in Makefile output.
+- [x] kubectl context check + `kubectl get nodes` Ready ×3 in Makefile output.
 
 ## Done when
 

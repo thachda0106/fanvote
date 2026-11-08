@@ -80,12 +80,13 @@ services:
       KAFKA_NODE_ID: "0"
       KAFKA_PROCESS_ROLES: "broker,controller"
       KAFKA_CONTROLLER_QUORUM_VOTERS: "0@kafka-0:9093,1@kafka-1:9093,2@kafka-2:9093"
-      # Dual listeners: INTERNAL for broker/healthcheck traffic (in-network
-      # DNS), EXTERNAL for host clients. Host ports 19092-19094 because this
-      # box already runs other projects on 9092/9093 (README toolchain notes).
-      KAFKA_LISTENERS: "INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:19092"
-      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-0:9092,EXTERNAL://localhost:19092"
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      # Triple listeners: INTERNAL for broker/healthcheck traffic (in-network
+      # DNS), EXTERNAL for host clients, KIND for pods in the kind cluster
+      # (same container port on every broker; distinct host mappings). Host
+      # ports 1909x because this box already runs other projects on 9092/9093.
+      KAFKA_LISTENERS: "INTERNAL://:9092,CONTROLLER://:9093,EXTERNAL://:19092,KIND://:19095"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-0:9092,EXTERNAL://localhost:19092,KIND://host.docker.internal:19095"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,KIND:PLAINTEXT"
       KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
       KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
@@ -97,6 +98,7 @@ services:
       KAFKA_LOG_DIRS: "/var/lib/kafka/data"
     ports:
       - "19092:19092"
+      - "19095:19095" # KIND listener (kind pods → host.docker.internal)
     volumes:
       - kafka-0-data:/var/lib/kafka/data
     healthcheck:
@@ -112,9 +114,10 @@ services:
     environment:
       <<: *kafka-common
       KAFKA_NODE_ID: "1"
-      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-1:9092,EXTERNAL://localhost:19093"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-1:9092,EXTERNAL://localhost:19093,KIND://host.docker.internal:19096"
     ports:
       - "19093:19092"
+      - "19096:19095" # KIND listener
     volumes:
       - kafka-1-data:/var/lib/kafka/data
     depends_on:
@@ -126,9 +129,10 @@ services:
     environment:
       <<: *kafka-common
       KAFKA_NODE_ID: "2"
-      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-2:9092,EXTERNAL://localhost:19094"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka-2:9092,EXTERNAL://localhost:19094,KIND://host.docker.internal:19097"
     ports:
       - "19094:19092"
+      - "19097:19095" # KIND listener
     volumes:
       - kafka-2-data:/var/lib/kafka/data
     depends_on:

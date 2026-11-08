@@ -10,19 +10,19 @@ dashboards/alerts on top.
 
 ## Subtasks
 
-- [ ] **Structured JSON logs** — pino (Nest), logback JSON (Spring), structlog
+- [x] **Structured JSON logs** — pino (Nest), logback JSON (Spring), structlog
       (FastAPI); fields: level, msg, correlation id, traceparent, service,
       route, status, duration_ms.
-- [ ] **Correlation id + traceparent in AND out** (propagated to downstream
+- [x] **Correlation id + traceparent in AND out** (propagated to downstream
       calls and Kafka headers).
-- [ ] **RED metrics** on `/metrics`: request count by route+status class,
+- [x] **RED metrics** on `/metrics`: request count by route+status class,
       latency histogram, in-flight; Kafka: consumer lag, DLQ depth, outbox
       backlog gauges.
-- [ ] **Error classification**: 4xx / 5xx / typed-503 (`DEPENDENCY_UNAVAILABLE`
+- [x] **Error classification**: 4xx / 5xx / typed-503 (`DEPENDENCY_UNAVAILABLE`
       envelope) per ground rule 8 — a helper used by every service.
-- [ ] `/metrics` NOT exposed through the gateway (edge blocklist) — verified
+- [x] `/metrics` NOT exposed through the gateway (edge blocklist) — verified
       in Phase 4 Task 4.2 but wired now.
-- [ ] Add a CI lint: every service exposes `/healthz`, `/readyz`, `/metrics`
+- [x] Add a CI lint: every service exposes `/healthz`, `/readyz`, `/metrics`
       (curl smoke in e2e).
 
 ## Done when

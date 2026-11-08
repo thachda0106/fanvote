@@ -9,15 +9,15 @@ in Phase 5.
 
 ## Subtasks
 
-- [ ] Vote stub endpoint writes an **outbox row** in the same tx as its state
+- [x] Vote stub endpoint writes an **outbox row** in the same tx as its state
       change (real outbox table, even though domain logic is a stub).
-- [ ] Outbox relay (poller, `UPDATE…RETURNING` claim) publishes to Kafka topic
+- [x] Outbox relay (poller, `UPDATE…RETURNING` claim) publishes to Kafka topic
       `vote.cast` with `traceparent` in headers, partition key = event id.
-- [ ] Analytics stub consumer (consumer group `analytics`) writes a Mongo doc
+- [x] Analytics stub consumer (consumer group `analytics`) writes a Mongo doc
       keyed by event id; manual commit after side-effect.
-- [ ] `make e2e` assertion: vote request → Mongo doc visible **< 1 s** (poll
+- [x] `make e2e` assertion: vote request → Mongo doc visible **< 1 s** (poll
       10× at 100 ms, fail on timeout).
-- [ ] Negative: kill the relay mid-test → outbox rows accumulate, relay
+- [x] Negative: kill the relay mid-test → outbox rows accumulate, relay
       restart → docs appear (proves at-least-once, no loss).
 
 ## Done when

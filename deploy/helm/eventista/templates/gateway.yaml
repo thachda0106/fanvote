@@ -1,0 +1,153 @@
+{{- $gw := .Values.gateway -}}
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: eventista-proxy
+  namespace: {{ .Release.Namespace }}
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: {{ $gw.serviceType }}
+{{- if eq $gw.serviceType "NodePort" }}
+        patch:
+          type: StrategicMerge
+          value:
+            spec:
+              # kind maps hostPort on the control-plane node; the Envoy pod may
+              # land on any node, so Local would blackhole the NodePort.
+              externalTrafficPolicy: Cluster
+              ports:
+                - port: 80
+                  nodePort: {{ $gw.httpNodePort }}
+{{- end }}
+  telemetry:
+    tracing:
+      samplingRate: 100
+      provider:
+        type: OpenTelemetry
+        host: otel-collector.{{ .Release.Namespace }}.svc.cluster.local
+        port: 4317
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eventista
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: eventista-proxy
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: eventista
+  namespace: {{ .Release.Namespace }}
+spec:
+  gatewayClassName: eventista
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 80
+      allowedRoutes:
+        namespaces:
+          from: Same
+---
+# Public paths are service-namespaced: /api/v1/{segment}/... is rewritten to
+# the contract path /api/v1/... before reaching the backend (contracts stay
+# the single source of truth for backend paths).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: identity
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - name: eventista
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/identity
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /api/v1
+      backendRefs:
+        - name: identity
+          port: 3001
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: votes
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - name: eventista
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/votes
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /api/v1
+      backendRefs:
+        - name: voting
+          port: 3002
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: commerce
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - name: eventista
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/commerce
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /api/v1
+      backendRefs:
+        - name: commerce
+          port: 8081
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: analytics
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - name: eventista
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/analytics
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /api/v1
+      backendRefs:
+        - name: analytics
+          port: 8001

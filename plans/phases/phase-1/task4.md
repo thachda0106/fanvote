@@ -9,20 +9,20 @@ onward — tracing is never retrofitted.
 
 ## Subtasks
 
-- [ ] OTel SDK per service:
+- [x] OTel SDK per service:
   - NestJS: `@opentelemetry/sdk-node` (auto-instrument HTTP + pg/ioredis);
   - Spring Boot: actuator + OTel Java agent;
   - FastAPI: `opentelemetry-instrument` (uvicorn + pymongo + kafka).
-- [ ] Collector → Jaeger via Helm chart in `deploy/helm/eventista/` (or
+- [x] Collector → Jaeger via Helm chart in `deploy/helm/eventista/` (or
       observability subchart).
-- [ ] **Propagation:** `traceparent` through gateway headers AND Kafka record
+- [x] **Propagation:** `traceparent` through gateway headers AND Kafka record
       headers (producer sets, consumer reads) — async spans join the trace.
-- [ ] Correlation id: `X-Request-Id` accepted/generated at edge, present in
+- [x] Correlation id: `X-Request-Id` accepted/generated at edge, present in
       every structured log line in AND out of each service.
-- [ ] Create `load/k6/smoke.js` assertions unchanged; add trace assertion to
+- [x] Create `load/k6/smoke.js` assertions unchanged; add trace assertion to
       `make e2e`: query Jaeger API for the trace id from one k6 run and assert
       ≥ gateway span + ≥1 service span + ≥1 DB span.
-- [ ] Kafka async assertion: `vote.cast` consumer span has the same trace id
+- [x] Kafka async assertion: `vote.cast` consumer span has the same trace id
       as the producing request (W3C `traceparent` in record headers).
 
 ## Done when

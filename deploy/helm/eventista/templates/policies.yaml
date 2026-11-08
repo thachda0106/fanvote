@@ -1,0 +1,45 @@
+{{- if .Values.jwt.jwksUri }}
+# Edge JWT pre-filter (cheap, not the authority — ADR-0007). `optional: true`
+# lets token-less calls through to public routes; present-but-invalid tokens
+# are rejected with 401. Services still verify every token locally.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: SecurityPolicy
+metadata:
+  name: edge-jwt
+  namespace: {{ .Release.Namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: eventista
+  jwt:
+    optional: true
+    providers:
+      - name: identity
+        issuer: {{ .Values.jwt.issuer | quote }}
+        audiences:
+          - {{ .Values.jwt.audience | quote }}
+        remoteJWKS:
+          uri: {{ .Values.jwt.jwksUri | quote }}
+{{- end }}
+{{- $routes := list "identity" "votes" "commerce" "analytics" }}
+{{- range $routes }}
+---
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: BackendTrafficPolicy
+metadata:
+  name: {{ . }}-rate-limit
+  namespace: {{ $.Release.Namespace }}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      name: {{ . }}
+  rateLimit:
+    type: Local
+    local:
+      rules:
+        - limit:
+            requests: {{ ternary $.Values.rateLimits.analyticsRequestsPerMinute $.Values.rateLimits.defaultRequestsPerMinute (eq . "analytics") }}
+            unit: Minute
+{{- end }}

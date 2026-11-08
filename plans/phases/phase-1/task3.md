@@ -9,16 +9,16 @@ quota (Phase 2) and orders (Phase 3) need a user identity before then.
 
 ## Subtasks
 
-- [ ] Minimal issuer inside `services/identity` `test`/`dev` profile (or
+- [x] Minimal issuer inside `services/identity` `test`/`dev` profile (or
       `services/identity/testsupport/`): generates RS256 keypair on boot,
       serves `/.well-known/jwks.json`, mints tokens for a seeded user set
       (`seed/` users from T2.1 — placeholder users allowed now).
-- [ ] Same claims/iss/aud/kid contract as the real Phase 4 issuer — only the
+- [x] Same claims/iss/aud/kid contract as the real Phase 4 issuer — only the
       OAuth dance is absent; signing path identical.
-- [ ] Gateway + services fetch JWKS from this endpoint (proves rotation-safe
+- [x] Gateway + services fetch JWKS from this endpoint (proves rotation-safe
       verification path early).
-- [ ] `make token USER=...` helper prints a dev token for curl/manual tests.
-- [ ] Document in `docs/decisions.md` (product-rules row: "mock IdP signs too").
+- [x] `make token USER=...` helper prints a dev token for curl/manual tests.
+- [x] Document in `docs/decisions.md` (product-rules row: "mock IdP signs too").
 
 ## Done when
 

@@ -1,13 +1,10 @@
 import { Controller, Get, Header } from '@nestjs/common';
-import { Registry, collectDefaultMetrics } from 'prom-client';
-
-const registry = new Registry();
-collectDefaultMetrics({ register: registry });
+import { registry } from '../common/metrics';
 
 /**
- * Observability-only surface (T0.5): /healthz liveness is datastore-
- * independent; /readyz returns 503 when degraded (D-12 — checks wired in
- * Phase 6, never boot-fail on a datastore blip, R-17); /metrics exposes RED.
+ * Observability surface (T1.6): /healthz liveness is datastore-independent;
+ * /readyz check wiring lands in Phase 6 (D-12, never boot-fail on a blip, R-17);
+ * /metrics exposes RED series and is never routed through the gateway (Q-22).
  */
 @Controller()
 export class HealthController {
@@ -17,8 +14,7 @@ export class HealthController {
   }
 
   @Get('readyz')
-  readyz(): { status: 'ready' | 'degraded'; checks: { name: string; ok: boolean }[] } {
-    // Phase 0: no datastore checks yet. Phase 6 adds them and flips to 503.
+  readyz(): { status: 'ready'; checks: { name: string; ok: boolean }[] } {
     return { status: 'ready', checks: [] };
   }
 
